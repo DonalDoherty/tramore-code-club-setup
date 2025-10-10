@@ -101,6 +101,25 @@ def get_safe_name(student_name):
     """Get a safe folder/branch name from a student name."""
     return student_name.lower().replace(' ', '-')
 
+def copy_all_files(src_dir, dest_dir, exclude_dirs=None):
+    """Copy all files recursively from src to dest directory, excluding certain directories."""
+    if exclude_dirs is None:
+        exclude_dirs = ['.git']
+    
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
+    
+    # Copy all files, preserving directory structure
+    for item in os.listdir(src_dir):
+        src_item = os.path.join(src_dir, item)
+        dest_item = os.path.join(dest_dir, item)
+        
+        if os.path.isdir(src_item):
+            if item not in exclude_dirs:
+                copy_all_files(src_item, dest_item, exclude_dirs)
+        else:
+            shutil.copy2(src_item, dest_item)
+
 def pull_student_files(student_name, branch_name):
     """Pull the latest files for a student and sync them to their folder."""
     print(f"Getting your latest saved files... please wait...")
@@ -134,18 +153,21 @@ def pull_student_files(student_name, branch_name):
         
         # Check if repo student folder exists after pull
         if os.path.exists(repo_student_folder):
-            # Copy files from repo to student folder
-            python_files = list(Path(repo_student_folder).glob("*.py"))
-            if python_files:
-                for py_file in python_files:
-                    # Copy files to student folder
-                    dest_file = os.path.join(student_folder, py_file.name)
-                    shutil.copy2(py_file, dest_file)
-                print(f"Found {len(python_files)} saved Python files!")
+            # Count files before copying
+            file_count = sum([len(files) for _, _, files in os.walk(repo_student_folder)])
+            
+            # Copy all files from repo to student folder (recursive)
+            copy_all_files(repo_student_folder, student_folder)
+            
+            if file_count > 0:
+                print(f"Found {file_count} saved files!")
     
     # If there are no files yet, create default ones
-    files = list(Path(student_folder).glob("*.py"))
-    if not files:
+    all_files = []
+    for root, _, files in os.walk(student_folder):
+        all_files.extend([os.path.join(root, f) for f in files])
+    
+    if not all_files:
         create_student_folder(student_name)
 
 def show_welcome_screen():
@@ -271,8 +293,8 @@ def create_student_folder(student_name):
             f.write(f"This folder contains Python projects for Tramore Code Club.\n")
     
     # Create a default Python file if none exists
-    files = list(Path(student_folder).glob("*.py"))
-    if not files:
+    python_files = list(Path(student_folder).glob("*.py"))
+    if not python_files:
         default_file = os.path.join(student_folder, f"program.py")
         with open(default_file, "w") as f:
             f.write(f"""# {student_name}'s Python Program
@@ -289,6 +311,29 @@ def get_student_folder(student_name):
     safe_name = get_safe_name(student_name)
     return os.path.join(WORK_DIR, safe_name)
 
+def count_files_by_type(folder):
+    """Count files by type in a folder and its subdirectories."""
+    file_counts = {
+        "python": 0,
+        "text": 0,
+        "other": 0,
+        "total": 0,
+        "dirs": 0
+    }
+    
+    for root, dirs, files in os.walk(folder):
+        file_counts["dirs"] += len(dirs)
+        for file in files:
+            file_counts["total"] += 1
+            if file.endswith('.py'):
+                file_counts["python"] += 1
+            elif file.endswith('.txt'):
+                file_counts["text"] += 1
+            else:
+                file_counts["other"] += 1
+    
+    return file_counts
+
 def load_student_code(student_name):
     """Load the student's code (just print the path without opening editor)."""
     student_folder = get_student_folder(student_name)
@@ -297,18 +342,21 @@ def load_student_code(student_name):
     if not os.path.exists(student_folder):
         create_student_folder(student_name)
     
-    files = list(Path(student_folder).glob("*.py"))
+    # Count files by type
+    file_counts = count_files_by_type(student_folder)
     
-    if files:
-        print("\nYour Python files:")
-        for i, file in enumerate(files, 1):
-            print(f"{i}. {file.name}")
-            
-        # Find the most recently modified Python file
-        latest_file = max(files, key=lambda f: f.stat().st_mtime)
-        file_path = str(latest_file)
-        print(f"\nMost recent file: {os.path.basename(file_path)}")
-        print(f"Location: {file_path}")
+    if file_counts["total"] > 0:
+        print(f"\nYour folder contains:")
+        print(f"- {file_counts['python']} Python file(s)")
+        print(f"- {file_counts['text']} Text file(s)")
+        print(f"- {file_counts['other']} Other file(s)")
+        
+        if file_counts["dirs"] > 0:
+            print(f"- {file_counts['dirs']} folder(s)")
+        
+        # Show path to student folder
+        print(f"\nYour working folder is: {student_folder}")
+        print("Open this folder to see all your files.")
     else:
         # Create a new file
         file_path = os.path.join(student_folder, "program.py")
@@ -331,25 +379,30 @@ def save_work(student_name, branch_name):
     safe_name = get_safe_name(student_name)
     student_folder = get_student_folder(student_name)
     
-    # Check if there are any Python files
-    files = list(Path(student_folder).glob("*.py"))
-    if not files:
-        print("\nNo Python files found to save.")
+    # Check if there are any files
+    all_files = []
+    for root, _, files in os.walk(student_folder):
+        all_files.extend([os.path.join(root, f) for f in files])
+    
+    if not all_files:
+        print("\nNo files found to save.")
         return False
     
     # Create a backup first
     backup_folder = os.path.join(BACKUP_DIR, safe_name, datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(backup_folder, exist_ok=True)
-    for file in files:
-        shutil.copy2(file, backup_folder)
+    
+    # Copy entire directory structure to backup
+    copy_all_files(student_folder, backup_folder)
     
     # Copy files to the repository structure
     repo_student_folder = os.path.join(repo_path, "students", safe_name)
+    
+    # Ensure repository structure exists
     os.makedirs(repo_student_folder, exist_ok=True)
     
-    # Copy all Python files from student folder to repo
-    for file in files:
-        shutil.copy2(file, repo_student_folder)
+    # Copy all files from student folder to repo (recursive)
+    copy_all_files(student_folder, repo_student_folder)
     
     # Add all changes
     print("\nSaving your code...")
@@ -369,13 +422,14 @@ def save_work(student_name, branch_name):
     
     # Commit changes
     success, output = run_command(f"git commit -m \"{commit_msg}\"", working_dir=repo_path)
+    
     if not success:
         # Check if it's just because there are no changes
         if "nothing to commit" in output.lower():
             print("Your code is already saved!")
             return True
         else:
-            print("Could not save your code.")
+            print(f"Could not save your code. Error: {output}")
             return False
     
     # Push changes to GitHub on student's branch
@@ -384,9 +438,12 @@ def save_work(student_name, branch_name):
     if not success:
         print("Could not upload your code.")
         print("Don't worry! Your code is saved on this computer.")
+        print(f"Error: {output}")
         return False
     
     print("\nYour code has been saved successfully!")
+    file_counts = count_files_by_type(student_folder)
+    print(f"Saved {file_counts['total']} file(s) in total.")
     return True
 
 def show_main_menu(student_name):
