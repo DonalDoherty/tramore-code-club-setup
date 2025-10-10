@@ -40,22 +40,113 @@ def run_command(command, working_dir=None):
     except subprocess.CalledProcessError as e:
         return False, e.stderr
 
-def check_branch_exists(branch_name):
-    """Check if a branch exists on remote."""
+def setup_repository_if_needed():
+    """Setup or update the repository if it doesn't exist."""
     repo_path = os.path.join(WORK_DIR, REPO_NAME)
+    
+    # Check if repo directory exists
     if not os.path.exists(repo_path):
+        # Clone the repository
+        print("Setting up code storage... please wait...")
+        success, _ = run_command(f"git clone {REPO_URL}", working_dir=WORK_DIR)
+        if not success:
+            print("Could not connect to code storage.")
+            return False
+        
+        # Check if Git identity is set
+        _, has_name = run_command("git config --get user.name", working_dir=repo_path)
+        _, has_email = run_command("git config --get user.email", working_dir=repo_path)
+
+        # If not set, use defaults
+        if not has_name.strip():
+            run_command(f"git config --global user.name \"Tramore Code Club\"", working_dir=repo_path)
+        if not has_email.strip():
+            run_command(f"git config --global user.email \"tramore.code.club@example.com\"", working_dir=repo_path)
+    
+    return True
+
+def check_student_exists(student_name):
+    """Check if a student already exists by checking both folder and branch."""
+    # Check locally first - does the folder exist?
+    safe_name = get_safe_name(student_name)
+    student_folder = os.path.join(WORK_DIR, safe_name)
+    
+    if os.path.exists(student_folder):
+        return True
+    
+    # Setup repo if needed to check branches
+    if not setup_repository_if_needed():
         return False
     
-    # First pull the latest branches info    
+    # Check if the branch exists remotely
+    branch_name = f"student/{safe_name}"
+    repo_path = os.path.join(WORK_DIR, REPO_NAME)
+    
+    # Update remote info first
     run_command("git fetch", working_dir=repo_path)
     
-    # Then check for the branch
-    _, output = run_command(f"git ls-remote --heads origin {branch_name}", working_dir=repo_path)
-    return bool(output.strip())
+    # Check remote branches
+    success, output = run_command(f"git ls-remote --heads origin {branch_name}", working_dir=repo_path)
+    if success and output.strip():
+        return True
+    
+    # Check local branches too
+    success, output = run_command(f"git branch -a | grep {branch_name}", working_dir=repo_path)
+    if success and output.strip():
+        return True
+    
+    return False
 
 def get_safe_name(student_name):
     """Get a safe folder/branch name from a student name."""
     return student_name.lower().replace(' ', '-')
+
+def pull_student_files(student_name, branch_name):
+    """Pull the latest files for a student and sync them to their folder."""
+    print(f"Getting your latest saved files... please wait...")
+    
+    repo_path = os.path.join(WORK_DIR, REPO_NAME)
+    safe_name = get_safe_name(student_name)
+    student_folder = os.path.join(WORK_DIR, safe_name)
+    repo_student_folder = os.path.join(repo_path, "students", safe_name)
+    
+    # Ensure repository exists
+    if not os.path.exists(repo_path):
+        print("Setting up code storage... please wait...")
+        setup_repository_if_needed()
+    
+    # Checkout and pull the student branch
+    run_command(f"git checkout {MAIN_BRANCH}", working_dir=repo_path)  # Start from main
+    run_command("git fetch origin", working_dir=repo_path)  # Get latest branches
+    
+    # Check if branch exists remotely
+    _, output = run_command(f"git ls-remote --heads origin {branch_name}", working_dir=repo_path)
+    branch_exists_remote = bool(output.strip())
+    
+    if branch_exists_remote:
+        # Checkout the branch, creating it if needed
+        success, _ = run_command(f"git checkout {branch_name} 2>/dev/null || git checkout -b {branch_name} origin/{branch_name}", working_dir=repo_path)
+        if success:
+            run_command(f"git pull origin {branch_name}", working_dir=repo_path)
+        
+        # Create student folder if it doesn't exist
+        os.makedirs(student_folder, exist_ok=True)
+        
+        # Check if repo student folder exists after pull
+        if os.path.exists(repo_student_folder):
+            # Copy files from repo to student folder
+            python_files = list(Path(repo_student_folder).glob("*.py"))
+            if python_files:
+                for py_file in python_files:
+                    # Copy files to student folder
+                    dest_file = os.path.join(student_folder, py_file.name)
+                    shutil.copy2(py_file, dest_file)
+                print(f"Found {len(python_files)} saved Python files!")
+    
+    # If there are no files yet, create default ones
+    files = list(Path(student_folder).glob("*.py"))
+    if not files:
+        create_student_folder(student_name)
 
 def show_welcome_screen():
     """Show the welcome screen and get student name."""
@@ -76,8 +167,9 @@ def show_welcome_screen():
         safe_name = get_safe_name(student_name)
         branch_name = f"student/{safe_name}"
         
-        # Check if this is a new student
-        is_existing_student = check_branch_exists(branch_name)
+        # Check if this is a new student - ensure repository is setup first
+        setup_repository_if_needed()
+        is_existing_student = check_student_exists(student_name)
         
         if not is_existing_student:
             print("\nThis name doesn't have any saved work yet.")
@@ -93,6 +185,8 @@ def show_welcome_screen():
                 continue
         else:
             print(f"\nWelcome back, {student_name}!")
+            # Pull latest code for returning students
+            pull_student_files(student_name, branch_name)
             break
     
     return student_name, branch_name
@@ -260,6 +354,9 @@ def save_work(student_name, branch_name):
     # Add all changes
     print("\nSaving your code...")
     
+    # Make sure we're on the right branch
+    run_command(f"git checkout {branch_name} 2>/dev/null || git checkout -b {branch_name}", working_dir=repo_path)
+    
     # Stage changes in the student's folder
     success, _ = run_command(f"git add students/{safe_name}", working_dir=repo_path)
     if not success:
@@ -271,11 +368,15 @@ def save_work(student_name, branch_name):
     commit_msg = f"Update from {student_name} on {timestamp}"
     
     # Commit changes
-    success, _ = run_command(f"git commit -m \"{commit_msg}\"", working_dir=repo_path)
+    success, output = run_command(f"git commit -m \"{commit_msg}\"", working_dir=repo_path)
     if not success:
-        # No changes to commit
-        print("Your code is already saved!")
-        return True
+        # Check if it's just because there are no changes
+        if "nothing to commit" in output.lower():
+            print("Your code is already saved!")
+            return True
+        else:
+            print("Could not save your code.")
+            return False
     
     # Push changes to GitHub on student's branch
     print("Uploading your code to safe storage...")
