@@ -45,9 +45,17 @@ def check_branch_exists(branch_name):
     repo_path = os.path.join(WORK_DIR, REPO_NAME)
     if not os.path.exists(repo_path):
         return False
-        
+    
+    # First pull the latest branches info    
+    run_command("git fetch", working_dir=repo_path)
+    
+    # Then check for the branch
     _, output = run_command(f"git ls-remote --heads origin {branch_name}", working_dir=repo_path)
     return bool(output.strip())
+
+def get_safe_name(student_name):
+    """Get a safe folder/branch name from a student name."""
+    return student_name.lower().replace(' ', '-')
 
 def show_welcome_screen():
     """Show the welcome screen and get student name."""
@@ -65,15 +73,20 @@ def show_welcome_screen():
             continue
         
         # Create a safe branch name from student name
-        branch_name = f"student/{student_name.lower().replace(' ', '-')}"
+        safe_name = get_safe_name(student_name)
+        branch_name = f"student/{safe_name}"
         
         # Check if this is a new student
-        if not check_branch_exists(branch_name):
+        is_existing_student = check_branch_exists(branch_name)
+        
+        if not is_existing_student:
             print("\nThis name doesn't have any saved work yet.")
             print("Is this your first time here? (y/n)")
             first_time = input("> ").strip().lower()
             
             if first_time == "y":
+                # Create student folder automatically for new students
+                create_student_folder(student_name)
                 break
             else:
                 print("\nLet's try again. Please enter your name exactly as before.")
@@ -148,12 +161,10 @@ def setup_student_branch(branch_name):
         
     return True
 
-def ensure_student_folder(student_name):
-    """Ensure the student folder exists in the repository."""
-    repo_path = os.path.join(WORK_DIR, REPO_NAME)
-    # Use student name directly for the folder
-    safe_name = student_name.lower().replace(' ', '-')
-    student_folder = os.path.join(repo_path, "students", safe_name)
+def create_student_folder(student_name):
+    """Create a student folder directly under the work directory."""
+    safe_name = get_safe_name(student_name)
+    student_folder = os.path.join(WORK_DIR, safe_name)
     
     # Create student folder if it doesn't exist
     os.makedirs(student_folder, exist_ok=True)
@@ -179,8 +190,19 @@ print("Hello, World! My name is {student_name}!")
     
     return student_folder
 
-def load_student_code(student_folder):
+def get_student_folder(student_name):
+    """Get path to student folder."""
+    safe_name = get_safe_name(student_name)
+    return os.path.join(WORK_DIR, safe_name)
+
+def load_student_code(student_name):
     """Load the student's code (just print the path without opening editor)."""
+    student_folder = get_student_folder(student_name)
+    
+    # Ensure the folder exists
+    if not os.path.exists(student_folder):
+        create_student_folder(student_name)
+    
     files = list(Path(student_folder).glob("*.py"))
     
     if files:
@@ -212,8 +234,8 @@ print("Hello from Tramore Code Club!")
 def save_work(student_name, branch_name):
     """Save the student's work to GitHub."""
     repo_path = os.path.join(WORK_DIR, REPO_NAME)
-    safe_name = student_name.lower().replace(' ', '-')
-    student_folder = os.path.join(repo_path, "students", safe_name)
+    safe_name = get_safe_name(student_name)
+    student_folder = get_student_folder(student_name)
     
     # Check if there are any Python files
     files = list(Path(student_folder).glob("*.py"))
@@ -226,6 +248,14 @@ def save_work(student_name, branch_name):
     os.makedirs(backup_folder, exist_ok=True)
     for file in files:
         shutil.copy2(file, backup_folder)
+    
+    # Copy files to the repository structure
+    repo_student_folder = os.path.join(repo_path, "students", safe_name)
+    os.makedirs(repo_student_folder, exist_ok=True)
+    
+    # Copy all Python files from student folder to repo
+    for file in files:
+        shutil.copy2(file, repo_student_folder)
     
     # Add all changes
     print("\nSaving your code...")
@@ -291,9 +321,8 @@ def main():
             choice = show_main_menu(student_name)
             
             if choice == "1":
-                # Load code - just ensure folder exists and show files
-                student_folder = ensure_student_folder(student_name)
-                load_student_code(student_folder)
+                # Load code - load files and show information
+                load_student_code(student_name)
                 print("\nYour code has been loaded!")
                 print("\nYou can now edit your files in your preferred editor.")
                 
@@ -316,7 +345,7 @@ def main():
     except KeyboardInterrupt:
         print("\nGoodbye!")
     except Exception as e:
-        print(f"\nSomething went wrong: {e}")
+        print(f"\nSomething went wrong: {str(e)}")
         print("Please ask your mentor for help.")
     
     input("\nPress Enter to exit...")
