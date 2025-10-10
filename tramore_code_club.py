@@ -169,31 +169,33 @@ print("Hello, World! My name is {student_name}!")
     
     return student_folder
 
-def open_mu_editor(folder_path, student_name):
-    """Open Mu editor with the student's most recent Python file."""
-    files = list(Path(folder_path).glob("*.py"))
+def load_student_code(student_folder):
+    """Load the student's code (just print the path without opening editor)."""
+    files = list(Path(student_folder).glob("*.py"))
     
     if files:
+        print("\nYour Python files:")
+        for i, file in enumerate(files, 1):
+            print(f"{i}. {file.name}")
+            
         # Find the most recently modified Python file
         latest_file = max(files, key=lambda f: f.stat().st_mtime)
         file_path = str(latest_file)
+        print(f"\nMost recent file: {os.path.basename(file_path)}")
+        print(f"Location: {file_path}")
     else:
         # Create a new file
-        file_path = os.path.join(folder_path, "program.py")
+        file_path = os.path.join(student_folder, "program.py")
         with open(file_path, "w") as f:
-            f.write(f"""# {student_name}'s Python Program
+            f.write(f"""# Python Program
 # Created: {datetime.datetime.now().strftime("%Y-%m-%d")}
 
 print("Hello from Tramore Code Club!")
 """)
+        print(f"\nCreated new file: {file_path}")
     
-    # Launch Mu editor
-    print(f"\nOpening your code in Mu editor...")
-    try:
-        subprocess.Popen(["mu-editor", file_path], start_new_session=True)
-    except FileNotFoundError:
-        print("\nCould not find Mu editor. Please ask your mentor for help.")
-        return False
+    print(f"\nYou can find your files in: {student_folder}")
+    print("Open these files with your favorite editor to start coding.")
         
     return True
 
@@ -279,12 +281,11 @@ def main():
             choice = show_main_menu(student_name)
             
             if choice == "1":
-                # Load code
+                # Load code - just ensure folder exists and show files
                 student_folder = ensure_student_folder(student_name)
-                if open_mu_editor(student_folder, student_name):
-                    print("\nYour code has been loaded!")
-                    print("\nWork on your code in the Mu editor window.")
-                    print("When you're done, come back here and choose 'Save My Code'.")
+                load_student_code(student_folder)
+                print("\nYour code has been loaded!")
+                print("\nYou can now edit your files in your preferred editor.")
                 
             elif choice == "2":
                 # Save code
