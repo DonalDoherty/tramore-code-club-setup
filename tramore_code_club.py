@@ -85,6 +85,16 @@ def show_welcome_screen():
     return student_name, branch_name
 
 def setup_repository():
+    # Check if Git identity is set
+    _, has_name = run_command("git config --get user.name", working_dir=repo_path)
+    _, has_email = run_command("git config --get user.email", working_dir=repo_path)
+
+    # If not set, use defaults
+    if not has_name.strip():
+        run_command(f"git config --global user.name \"Tramore Code Club\"", working_dir=repo_path)
+    if not has_email.strip():
+        run_command(f"git config --global user.email \"tramore.code.club@example.com\"", working_dir=repo_path)
+
     """Setup or update the repository quietly."""
     repo_path = os.path.join(WORK_DIR, REPO_NAME)
     
